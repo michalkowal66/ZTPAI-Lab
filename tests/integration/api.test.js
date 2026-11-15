@@ -1,27 +1,49 @@
 const request = require("supertest");
+const bcrypt = require("bcryptjs");
 const db = require("../../src/db/knex");
 const { createApp } = require("../../src/app");
-const { createBuildingsRepository } = require("../../src/modules/buildings/buildings.repository.knex");
-const { createRoomsRepository } = require("../../src/modules/rooms/rooms.repository.knex");
-const { createReservationsRepository } = require("../../src/modules/reservations/reservations.repository.knex");
-const { createUsersRepository } = require("../../src/modules/auth/auth.repository.knex");
+const {
+  createBuildingsRepository,
+} = require("../../src/modules/buildings/buildings.repository.knex");
+const {
+  createRoomsRepository,
+} = require("../../src/modules/rooms/rooms.repository.knex");
+const {
+  createReservationsRepository,
+} = require("../../src/modules/reservations/reservations.repository.knex");
+const {
+  createUsersRepository,
+} = require("../../src/modules/auth/auth.repository.knex");
+const {
+  createAuditLogRepository,
+} = require("../../src/modules/auditLog/auditLog.repository.knex");
+const { createEventBus } = require("../../src/events/eventBus");
+const { registerAuditListeners } = require("../../src/events/auditListeners");
 
 function createKnexUnitOfWork(dbInstance) {
   return {
-    runInTransaction: fn => dbInstance.transaction(trx => fn({
-      buildingsRepository: createBuildingsRepository(trx),
-      roomsRepository: createRoomsRepository(trx),
-      reservationsRepository: createReservationsRepository(trx),
-      usersRepository: createUsersRepository(trx)
-    }))
+    runInTransaction: (fn) =>
+      dbInstance.transaction((trx) =>
+        fn({
+          buildingsRepository: createBuildingsRepository(trx),
+          roomsRepository: createRoomsRepository(trx),
+          reservationsRepository: createReservationsRepository(trx),
+          usersRepository: createUsersRepository(trx),
+        }),
+      ),
   };
 }
+
+const eventBus = createEventBus();
+registerAuditListeners(eventBus, db);
 
 const app = createApp({
   runInTransaction: createKnexUnitOfWork(db).runInTransaction,
   buildingsRepository: createBuildingsRepository(db),
   roomsRepository: createRoomsRepository(db),
-  usersRepository: createUsersRepository(db)
+  usersRepository: createUsersRepository(db),
+  auditLogRepository: createAuditLogRepository(db),
+  eventBus,
 });
 
 async function registerAndLogin(email, password = "password-123") {
@@ -38,21 +60,46 @@ async function registerAndLogin(email, password = "password-123") {
   return res.body.accessToken;
 }
 
+async function createAndLoginAdmin(
+  email = "admin@example.com",
+  password = "admin-password-123",
+) {
+  const passwordHash = await bcrypt.hash(password, 10);
+  const [user] = await db("users")
+    .insert({
+      email,
+      password_hash: passwordHash,
+      role: "ADMIN",
+    })
+    .returning("*");
+
+  const res = await request(app)
+    .post("/api/auth/login")
+    .send({ email, password })
+    .expect(200);
+
+  return { token: res.body.accessToken, user };
+}
+
 beforeAll(async () => {
   await db.migrate.latest();
 });
 
 beforeEach(async () => {
-  await db.raw("TRUNCATE reservations, rooms, buildings, users RESTART IDENTITY CASCADE");
-  const [building] = await db("buildings").insert({
-    name: "Budynek A",
-    address: "ul. Główna 1"
-  }).returning("id");
+  await db.raw(
+    "TRUNCATE audit_log, reservations, rooms, buildings, users RESTART IDENTITY CASCADE",
+  );
+  const [building] = await db("buildings")
+    .insert({
+      name: "Budynek A",
+      address: "ul. Główna 1",
+    })
+    .returning("id");
 
   await db("rooms").insert({
     building_id: building.id,
     name: "101",
-    capacity: 10
+    capacity: 10,
   });
 });
 
@@ -72,7 +119,7 @@ describe("API Integration Tests", () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       email,
-      role: "USER"
+      role: "USER",
     });
     expect(res.body.id).toBeDefined();
   });
@@ -84,7 +131,7 @@ describe("API Integration Tests", () => {
       roomId: 1,
       participants: 5,
       startTime: "2027-01-10T10:00:00.000Z",
-      endTime: "2027-01-10T12:00:00.000Z"
+      endTime: "2027-01-10T12:00:00.000Z",
     };
 
     const res = await request(app)
@@ -116,15 +163,14 @@ describe("API Integration Tests", () => {
       expect.arrayContaining([
         expect.objectContaining({
           location: "body",
-          field: "roomId"
-        })
-      ])
+          field: "roomId",
+        }),
+      ]),
     );
   });
 
   test("4. 401 without token", async () => {
-    const res = await request(app)
-      .get("/api/reservations");
+    const res = await request(app).get("/api/reservations");
 
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe("UNAUTHORIZED");
@@ -139,7 +185,7 @@ describe("API Integration Tests", () => {
       .send({
         buildingId: 1,
         name: "102",
-        capacity: 15
+        capacity: 15,
       });
 
     expect(res.status).toBe(403);
@@ -157,7 +203,7 @@ describe("API Integration Tests", () => {
         roomId: 1,
         participants: 4,
         startTime: "2027-02-01T10:00:00.000Z",
-        endTime: "2027-02-01T12:00:00.000Z"
+        endTime: "2027-02-01T12:00:00.000Z",
       })
       .expect(201);
 
@@ -180,7 +226,7 @@ describe("API Integration Tests", () => {
         roomId: 1,
         participants: 5,
         startTime: "2027-03-01T10:00:00.000Z",
-        endTime: "2027-03-01T12:00:00.000Z"
+        endTime: "2027-03-01T12:00:00.000Z",
       })
       .expect(201);
 
@@ -191,7 +237,7 @@ describe("API Integration Tests", () => {
         roomId: 1,
         participants: 3,
         startTime: "2027-03-01T11:00:00.000Z",
-        endTime: "2027-03-01T13:00:00.000Z"
+        endTime: "2027-03-01T13:00:00.000Z",
       });
 
     expect(res.status).toBe(409);
@@ -210,7 +256,7 @@ describe("API Integration Tests", () => {
           roomId: 1,
           participants: 2,
           startTime: `2027-04-${dayStr}T10:00:00.000Z`,
-          endTime: `2027-04-${dayStr}T11:00:00.000Z`
+          endTime: `2027-04-${dayStr}T11:00:00.000Z`,
         })
         .expect(201);
     }
@@ -223,5 +269,120 @@ describe("API Integration Tests", () => {
     expect(res.body.data).toHaveLength(2);
     expect(res.body.meta.total).toBe(3);
     expect(res.body.meta.limit).toBe(2);
+  });
+
+  describe("Events & Audit Log", () => {
+    test("9. GET /api/admin/audit-log returns 403 for USER", async () => {
+      const token = await registerAndLogin("regularuser@example.com");
+
+      const res = await request(app)
+        .get("/api/admin/audit-log")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe("FORBIDDEN");
+    });
+
+    test("10. Full audit log scenario: create -> collision -> admin cancel -> double cancel", async () => {
+      const userToken = await registerAndLogin("scenario-user@example.com");
+      const { token: adminToken, user: adminUser } = await createAndLoginAdmin(
+        "scenario-admin@example.com",
+      );
+
+      // 1. Create reservation
+      const createRes = await request(app)
+        .post("/api/reservations")
+        .set("Authorization", `Bearer ${userToken}`)
+        .send({
+          roomId: 1,
+          participants: 4,
+          startTime: "2027-05-10T10:00:00.000Z",
+          endTime: "2027-05-10T12:00:00.000Z",
+        })
+        .expect(201);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const countAfterCreate = await db("audit_log")
+        .count("* as count")
+        .first();
+      expect(Number(countAfterCreate.count)).toBe(1);
+
+      // 2. Failed collision attempt (409)
+      await request(app)
+        .post("/api/reservations")
+        .set("Authorization", `Bearer ${userToken}`)
+        .send({
+          roomId: 1,
+          participants: 4,
+          startTime: "2027-05-10T11:00:00.000Z",
+          endTime: "2027-05-10T13:00:00.000Z",
+        })
+        .expect(409);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const countAfterCollision = await db("audit_log")
+        .count("* as count")
+        .first();
+      expect(Number(countAfterCollision.count)).toBe(1);
+
+      // 3. Admin cancels reservation
+      await request(app)
+        .patch(`/api/reservations/${createRes.body.id}/cancel`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .expect(200);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const countAfterCancel = await db("audit_log")
+        .count("* as count")
+        .first();
+      expect(Number(countAfterCancel.count)).toBe(2);
+
+      // 4. Repeated (idempotent) cancellation
+      await request(app)
+        .patch(`/api/reservations/${createRes.body.id}/cancel`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .expect(200);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const countAfterDoubleCancel = await db("audit_log")
+        .count("* as count")
+        .first();
+      expect(Number(countAfterDoubleCancel.count)).toBe(2);
+
+      // 5. Query GET /api/admin/audit-log
+      const auditRes = await request(app)
+        .get("/api/admin/audit-log")
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      expect(auditRes.status).toBe(200);
+      expect(auditRes.body.data).toHaveLength(2);
+      expect(auditRes.body.meta.total).toBe(2);
+
+      // Descending order: reservation.cancelled is newest, reservation.created is older
+      expect(auditRes.body.data[0].eventType).toBe("reservation.cancelled");
+      expect(auditRes.body.data[0].payload).toMatchObject({
+        reservationId: createRes.body.id,
+        cancelledBy: adminUser.id,
+      });
+
+      expect(auditRes.body.data[1].eventType).toBe("reservation.created");
+      expect(auditRes.body.data[1].payload).toMatchObject({
+        reservationId: createRes.body.id,
+        roomId: 1,
+      });
+
+      // Filter by ?eventType=reservation.created
+      const filteredRes = await request(app)
+        .get("/api/admin/audit-log?eventType=reservation.created")
+        .set("Authorization", `Bearer ${adminToken}`);
+
+      expect(filteredRes.status).toBe(200);
+      expect(filteredRes.body.data).toHaveLength(1);
+      expect(filteredRes.body.data[0].eventType).toBe("reservation.created");
+    });
   });
 });

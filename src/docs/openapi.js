@@ -41,6 +41,7 @@ const openapi = {
     { name: "Buildings", description: "Budynki" },
     { name: "Rooms", description: "Sale" },
     { name: "Reservations", description: "Rezerwacje" },
+    { name: "Admin", description: "Operacje administracyjne i audit log" },
   ],
   components: {
     securitySchemes: {
@@ -239,6 +240,30 @@ const openapi = {
         type: "object",
         properties: {
           data: arrayOf("ReservationResponse"),
+          meta: {
+            type: "object",
+            properties: {
+              page: { type: "integer" },
+              limit: { type: "integer" },
+              total: { type: "integer" },
+              totalPages: { type: "integer" },
+            },
+          },
+        },
+      },
+      AuditLogEntry: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          eventType: { type: "string", example: "reservation.created" },
+          payload: { type: "object" },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      AuditLogListResponse: {
+        type: "object",
+        properties: {
+          data: arrayOf("AuditLogEntry"),
           meta: {
             type: "object",
             properties: {
@@ -522,6 +547,35 @@ const openapi = {
           401: { $ref: "#/components/responses/Unauthorized" },
           404: { $ref: "#/components/responses/NotFound" },
           409: { $ref: "#/components/responses/Conflict" },
+        },
+      },
+    },
+    "/api/admin/audit-log": {
+      get: {
+        tags: ["Admin"],
+        summary: "Pobierz dziennik zdarzeń",
+        parameters: [
+          {
+            name: "eventType",
+            in: "query",
+            schema: { type: "string" },
+            description: "Filtruj po typie zdarzenia (np. reservation.created)",
+          },
+          {
+            name: "page",
+            in: "query",
+            schema: { type: "integer", minimum: 1, default: 1 },
+          },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+          },
+        ],
+        responses: {
+          200: jsonOk("Dziennik zdarzeń", ref("AuditLogListResponse")),
+          401: { $ref: "#/components/responses/Unauthorized" },
+          403: { $ref: "#/components/responses/Forbidden" },
         },
       },
     },

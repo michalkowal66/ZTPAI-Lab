@@ -5,6 +5,9 @@ const { createBuildingsRepository } = require("./modules/buildings/buildings.rep
 const { createRoomsRepository } = require("./modules/rooms/rooms.repository.knex");
 const { createReservationsRepository } = require("./modules/reservations/reservations.repository.knex");
 const { createUsersRepository } = require("./modules/auth/auth.repository.knex");
+const { createAuditLogRepository } = require("./modules/auditLog/auditLog.repository.knex");
+const { createEventBus } = require("./events/eventBus");
+const { registerAuditListeners } = require("./events/auditListeners");
 
 function createKnexUnitOfWork(dbInstance) {
   return {
@@ -17,13 +20,18 @@ function createKnexUnitOfWork(dbInstance) {
   };
 }
 
+const eventBus = createEventBus();
+registerAuditListeners(eventBus, db);
+
 const uow = createKnexUnitOfWork(db);
 
 const repositories = {
   runInTransaction: uow.runInTransaction,
   buildingsRepository: createBuildingsRepository(db),
   roomsRepository: createRoomsRepository(db),
-  usersRepository: createUsersRepository(db)
+  usersRepository: createUsersRepository(db),
+  auditLogRepository: createAuditLogRepository(db),
+  eventBus
 };
 
 const app = createApp(repositories);

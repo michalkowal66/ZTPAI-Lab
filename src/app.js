@@ -22,7 +22,10 @@ const { createAuthService } = require("./modules/auth/auth.service");
 const { createAuthController } = require("./modules/auth/auth.controller");
 const { createAuthRouter } = require("./modules/auth/auth.routes");
 
-function createApp({ runInTransaction, buildingsRepository, roomsRepository, usersRepository }) {
+const { createAuditLogController } = require("./modules/auditLog/auditLog.controller");
+const { createAuditLogRouter } = require("./modules/auditLog/auditLog.routes");
+
+function createApp({ runInTransaction, buildingsRepository, roomsRepository, usersRepository, auditLogRepository, eventBus }) {
   const app = express();
   app.use(requestLogger);
   app.use(express.json());
@@ -38,8 +41,12 @@ function createApp({ runInTransaction, buildingsRepository, roomsRepository, use
   const roomsService = createRoomsService({ roomsRepository, buildingsRepository });
   app.use("/api/rooms", authenticate, createRoomsRouter(createRoomsController(roomsService)));
 
-  const reservationsService = createReservationsService({ runInTransaction });
+  const reservationsService = createReservationsService({ runInTransaction, eventBus });
   app.use("/api/reservations", authenticate, createReservationsRouter(createReservationsController(reservationsService)));
+
+  if (auditLogRepository) {
+    app.use("/api/admin/audit-log", authenticate, createAuditLogRouter(createAuditLogController(auditLogRepository)));
+  }
 
   app.use(notFound);
   app.use(errorHandler);

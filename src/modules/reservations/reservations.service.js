@@ -1,11 +1,12 @@
 const { NotFoundError, ConflictError, ValidationError } = require("../../errors/AppError");
+const { noopEventBus } = require("../../events/eventBus");
 
 const ALLOWED_TRANSITIONS = {
   CONFIRMED: ["CANCELLED"],
   CANCELLED: []
 };
 
-function createReservationsService({ runInTransaction, now = () => new Date() }) {
+function createReservationsService({ runInTransaction, eventBus = noopEventBus, now = () => new Date() }) {
   return {
     async listReservations(query, currentUser) {
       return runInTransaction(async ({ reservationsRepository }) => {
@@ -30,7 +31,7 @@ function createReservationsService({ runInTransaction, now = () => new Date() })
       });
     },
     async createReservation(data, currentUser) {
-      return runInTransaction(async ({ reservationsRepository, roomsRepository }) => {
+      const created = await runInTransaction(async ({ reservationsRepository, roomsRepository }) => {
         // await roomsRepository.lockById(data.roomId);
 
         const room = await roomsRepository.findById(data.roomId);
@@ -65,13 +66,27 @@ function createReservationsService({ runInTransaction, now = () => new Date() })
 
         return reservationsRepository.create({ ...data, userId: currentUser.id });
       });
+
+      eventBus.publish("reservation.created", {
+        reservationId: created.id,
+        roomId: (created.room && created.room.id) || created.roomId || data.roomId,
+        userId: (created.user && created.user.id) || created.userId || currentUser.id,
+        startTime: created.startTime,
+        endTime: created.endTime
+      });
+
+      return created;
     },
     async cancelReservation(id, currentUser) {
-      return runInTransaction(async ({ reservationsRepository }) => {
+      let wasCancelled = false;
+      let targetReservation;
+
+      const updated = await runInTransaction(async ({ reservationsRepository }) => {
         const reservation = await reservationsRepository.findById(id);
         if (!reservation || (currentUser.role !== "ADMIN" && reservation.user.id !== currentUser.id)) {
           throw new NotFoundError("Reservation");
         }
+        targetReservation = reservation;
         if (reservation.status === "CANCELLED") return reservation;
         if (!ALLOWED_TRANSITIONS[reservation.status].includes("CANCELLED")) {
           throw new ConflictError(`Cannot change status from ${reservation.status} to CANCELLED`, "INVALID_STATUS_TRANSITION");
@@ -79,9 +94,22 @@ function createReservationsService({ runInTransaction, now = () => new Date() })
         if (new Date(reservation.startTime).getTime() <= now().getTime()) {
           throw new ConflictError("Cannot cancel reservation that already started", "RESERVATION_ALREADY_STARTED");
         }
+        wasCancelled = true;
         return reservationsRepository.updateStatus(id, "CANCELLED");
       });
+
+      if (wasCancelled) {
+        eventBus.publish("reservation.cancelled", {
+          reservationId: updated.id,
+          roomId: (updated.room && updated.room.id) || (targetReservation.room && targetReservation.room.id) || targetReservation.roomId,
+          userId: (updated.user && updated.user.id) || (targetReservation.user && targetReservation.user.id) || targetReservation.userId,
+          cancelledBy: currentUser.id
+        });
+      }
+
+      return updated;
     }
   };
 }
+
 module.exports = { createReservationsService };

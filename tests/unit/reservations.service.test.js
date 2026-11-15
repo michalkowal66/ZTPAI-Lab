@@ -16,16 +16,21 @@ const ADMIN = { id: 99, role: "ADMIN" };
 
 // Helpers
 
-function setup({ rooms, reservations, now } = {}) {
+function setup({ rooms, reservations, now, eventBus } = {}) {
   const { runInTransaction } = createInMemoryRepositories({
     rooms: rooms ?? [ROOM, ROOM2],
     reservations: reservations ?? [],
   });
+  const mockEventBus = eventBus ?? {
+    publish: jest.fn(),
+    subscribe: jest.fn(),
+  };
   const service = createReservationsService({
     runInTransaction,
+    eventBus: mockEventBus,
     now: now ?? (() => NOW),
   });
-  return { service };
+  return { service, eventBus: mockEventBus };
 }
 
 /** Shorthand for a reservation data object (input to createReservation). */
@@ -249,5 +254,78 @@ describe("ReservationsService.cancelReservation", () => {
 
     const result = await service.cancelReservation(1, ADMIN);
     expect(result.status).toBe("CANCELLED");
+  });
+});
+
+describe("ReservationsService event publishing", () => {
+  test("publishes reservation.created after successful reservation creation", async () => {
+    const { service, eventBus } = setup();
+
+    const created = await service.createReservation(bookingData(), ALICE);
+
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      "reservation.created",
+      expect.objectContaining({
+        reservationId: created.id,
+        roomId: 1,
+        userId: ALICE.id,
+        startTime: "2026-12-01T10:00:00Z",
+        endTime: "2026-12-01T12:00:00Z",
+      }),
+    );
+  });
+
+  test("does not publish reservation.created when creation fails (e.g. room overlap)", async () => {
+    const { service, eventBus } = setup({
+      reservations: [existingReservation()],
+    });
+
+    await expect(
+      service.createReservation(bookingData(), ALICE),
+    ).rejects.toMatchObject({ code: "ROOM_ALREADY_BOOKED" });
+
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  test("publishes reservation.cancelled after successful reservation cancellation", async () => {
+    const { service, eventBus } = setup({
+      reservations: [
+        existingReservation({
+          userId: ALICE.id,
+          user: { id: ALICE.id },
+        }),
+      ],
+    });
+
+    await service.cancelReservation(1, ALICE);
+
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      "reservation.cancelled",
+      expect.objectContaining({
+        reservationId: 1,
+        roomId: 1,
+        userId: ALICE.id,
+        cancelledBy: ALICE.id,
+      }),
+    );
+  });
+
+  test("does not publish reservation.cancelled on idempotent double cancellation", async () => {
+    const { service, eventBus } = setup({
+      reservations: [
+        existingReservation({
+          userId: ALICE.id,
+          user: { id: ALICE.id },
+          status: "CANCELLED",
+          cancelledAt: "2026-10-15T08:00:00Z",
+        }),
+      ],
+    });
+
+    await service.cancelReservation(1, ALICE);
+
+    expect(eventBus.publish).not.toHaveBeenCalled();
   });
 });
