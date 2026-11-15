@@ -27,6 +27,17 @@ const repositories = {
 };
 
 const app = createApp(repositories);
-app.listen(config.PORT, () => {
+const server = app.listen(config.PORT, () => {
   console.log(`Server running on http://localhost:${config.PORT}`);
 });
+
+async function shutdown(signal) {
+  console.log(`${signal} received, shutting down`);
+  server.close(async () => {
+    await db.destroy();
+    process.exit(0);
+  });
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
