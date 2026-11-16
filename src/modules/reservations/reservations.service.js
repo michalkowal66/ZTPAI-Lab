@@ -92,7 +92,7 @@ function createReservationsService({
             if (res.status !== "CONFIRMED") continue;
             const resStart = new Date(res.startTime).getTime();
             const resEnd = new Date(res.endTime).getTime();
-            if (start <= resEnd && resStart < end) {
+            if (start < resEnd && resStart < end) {
               throw new ConflictError(
                 "Room is already booked for this time",
                 "ROOM_ALREADY_BOOKED",
