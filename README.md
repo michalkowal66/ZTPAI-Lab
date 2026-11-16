@@ -1,5 +1,7 @@
 # Room Booking API
 
+![CI](https://github.com/michalkowal66/ZTPAI-Lab/actions/workflows/ci.yml/badge.svg)
+
 System zarządzania rezerwacjami sal konferencyjnych z autoryzacją JWT, bazą PostgreSQL oraz Swagger UI.
 
 ---
