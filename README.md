@@ -83,6 +83,14 @@ docker compose down -v
 
 ## Testy
 
+Testy integracyjne korzystają z osobnej bazy testowej `roombooking_test`, aby nie naruszać danych aplikacji. Przy uruchamianiu testów lokalnie utwórz ją jednorazowo w kontenerze bazy:
+
+```bash
+docker compose exec db psql -U postgres -c "CREATE DATABASE roombooking_test;"
+```
+
+_(Krok jest potrzebny tylko dla testów uruchamianych lokalnie. Bazę wystarczy utworzyć raz po utworzeniu kontenerów. W środowisku CI baza testowa jest tworzona automatycznie.)_
+
 Uruchomienie wszystkich testów (jednostkowych i integracyjnych):
 
 ```bash
